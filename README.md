@@ -1,7 +1,6 @@
 # Boosting the Transferability of Adversarial Attacks with Reverse Adversarial Perturbation (NeurIPS 2022)
  
 
-
 **PyTorch implementation for the state-of-art transfer attack: Reverse Adversarial Perturbation (RAP).**
 
 *Boosting the Transferability of Adversarial Attacks with Reverse Adversarial Perturbation*
