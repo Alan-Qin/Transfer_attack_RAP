@@ -45,7 +45,6 @@ parser.add_argument('--save', type=int, default=0)
 parser.add_argument('--MI', action='store_true')
 parser.add_argument('--DI', action='store_true')
 parser.add_argument('--TI', action='store_true')
-parser.add_argument('--NI', action='store_true')
 parser.add_argument('--SI', action='store_true')
 parser.add_argument('--SI_number', type=int, default=1)
 
@@ -343,27 +342,15 @@ for k in range(0, num_batches):
             for j in range(arg.SI_number):
                 
                 if arg.DI:  # DI
-                    if arg.NI:
-                        if arg.SI:
-                            logits = model_source(norm(DI((X_ori + delta + X_aug - lr * grad_pre)/2**j)))
-                        else:
-                            logits = model_source(norm(DI(X_ori + delta + X_aug - lr * grad_pre)))
+                    if arg.SI:
+                        logits = model_source(norm(DI((X_ori + X_aug + delta)/2**j)))
                     else:
-                        if arg.SI:
-                            logits = model_source(norm(DI((X_ori + X_aug + delta)/2**j)))
-                        else:
-                            logits = model_source(norm(DI(X_ori + X_aug + delta)))
+                        logits = model_source(norm(DI(X_ori + X_aug + delta)))
                 else:
-                    if arg.NI:
-                        if arg.SI:
-                            logits = model_source(norm((X_ori + delta + X_aug - lr * grad_pre)/2**j))
-                        else:
-                            logits = model_source(norm(X_ori + delta + X_aug - lr * grad_pre))
+                    if arg.SI:
+                        logits = model_source(norm((X_ori + delta + X_aug)/2**j))
                     else:
-                        if arg.SI:
-                            logits = model_source(norm((X_ori + delta + X_aug)/2**j))
-                        else:
-                            logits = model_source(norm(X_ori + delta + X_aug))
+                        logits = model_source(norm(X_ori + delta + X_aug))
 
                 if arg.loss_function == 'CE':
                     loss_func = nn.CrossEntropyLoss(reduction='sum')
@@ -389,8 +376,10 @@ for k in range(0, num_batches):
         for j in range(len(grad_list)):
             grad_c += grad_list[j]
         grad_c = grad_c / len(grad_list)
-        if arg.MI or arg.NI:  # MI
+
+        if arg.MI:  # MI
             grad_c = grad_c / torch.mean(torch.abs(grad_c), (1, 2, 3), keepdim=True) + 1 * grad_pre
+            
         grad_pre = grad_c
         delta.data = delta.data - lr * torch.sign(grad_c)
         delta.data = delta.data.clamp(-epsilon / 255, epsilon / 255)
