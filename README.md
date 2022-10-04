@@ -49,12 +49,12 @@ In NeurIPS 2022.
     - SI or not: (--SI and --m2 5) or None 
     - Admix or not: (--m1 3 an --m2 5) or None
     - transpoint:
-    --transpoint 400: baseline method
-    --transpoint 0: baseline+RAP
-    --transpoint 100: baseline+RAP-LS
+      --transpoint 400: baseline method
+      --transpoint 0: baseline+RAP
+      --transpoint 100: baseline+RAP-LS
     - loss function: --loss_function: CE or MaxLogit for outer minimization
     - epsilon of attacks: --adv_epsilon: 16/255, the perturbation budget for - inner maximization
-    --adv_steps: 8, the step for inner maximization
+      --adv_steps: 8, the step for inner maximization
     ```
 
 3. This code is based on [source code from NeurIPS 2021 paper](https://github.com/ZhengyuZhao/Targeted-Tansfer) , *"On Success and Simplicity: A Second Look at Transferable Targeted Attacks"*. The used dataset is also contained in this repository. Please consider leaving a :star: on their repository.
