@@ -1,6 +1,6 @@
 # Boosting the Transferability of Adversarial Attacks with Reverse Adversarial Perturbation (NeurIPS 2022)
  
-----
+
 
 **PyTorch implementation for the state-of-art transfer attack: Reverse Adversarial Perturbation (RAP).**
 
@@ -12,11 +12,12 @@ In NeurIPS 2022.
 
 ----
 
-0. Codes:
-- rap_attack_new.py: simple version
-- rap_attack.py: full version
+### Codes:
+ - rap_attack_new.py: simple version
+ - rap_attack.py: full version
 
-1. The examples:
+
+### The examples:
 
 - targeted attack with DI and logit loss from ResNet-50
 
@@ -39,7 +40,7 @@ In NeurIPS 2022.
     python /targeted_attack/rap_attack_new.py --num_data_augmentation 1  --targeted  --transpoint 100 --seed 9018 --source_model resnet_50 --loss_function MaxLogit --DI --max_iterations 300
     ```
 
-2. The parameters of config:
+### The parameters of config:
 
     ```
     - targeted attack or not : --targeted or None
@@ -62,4 +63,4 @@ In NeurIPS 2022.
       --adv_steps: 8, the step for inner maximization
     ```
 
-3. This code is based on [source code from NeurIPS 2021 paper](https://github.com/ZhengyuZhao/Targeted-Tansfer) , *"On Success and Simplicity: A Second Look at Transferable Targeted Attacks"*. The used dataset is also contained in this repository. Please consider leaving a :star: on their repository.
+#### This code is based on [source code from NeurIPS 2021 paper](https://github.com/ZhengyuZhao/Targeted-Tansfer) , *"On Success and Simplicity: A Second Look at Transferable Targeted Attacks"*. The used dataset is also contained in this repository. Please consider leaving a :star: on their repository.
