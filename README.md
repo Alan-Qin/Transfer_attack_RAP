@@ -12,6 +12,9 @@ In NeurIPS 2022.
 
 ----
 
+0. Codes:
+- rap_attack_new.py: simple version
+- rap_attack.py: full version
 
 1. The examples:
 
@@ -47,7 +50,9 @@ In NeurIPS 2022.
     - DI or not: --DI or None
     - TI or not: --TI or None
     - SI or not: (--SI and --m2 5) or None 
-    - Admix or not: (--m1 3 an --m2 5) or None
+    - Admix or not: 
+      (--m1 3 an --m2 5) or None
+      --strength 0.2
     - transpoint:
       --transpoint 400: baseline method
       --transpoint 0: baseline+RAP

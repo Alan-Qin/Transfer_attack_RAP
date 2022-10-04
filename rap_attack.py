@@ -1,6 +1,4 @@
-from copy import deepcopy
 import math
-# from tkinter import X
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,40 +18,48 @@ import scipy.stats as st
 ## hyperparameter
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--batch_size', type=int, default=40)
+parser.add_argument('--source_model', type=str, default='resnet50', choices=['resnet50', 'inception-v3', 'densenet121', 'vgg16bn'])
+
+parser.add_argument('--batch_size', type=int, default=50)
 parser.add_argument('--max_iterations', type=int, default=400)
-parser.add_argument('--seed', type=int, default=23232)
 
 parser.add_argument('--loss_function', type=str, default='CE', choices=['CE','MaxLogit'])
-parser.add_argument('--num_data_augmentation', type=int, default=1)
-parser.add_argument('--transformation_rate', type=float, default=0.7)
 
 parser.add_argument('--targeted', action='store_true')
 
+parser.add_argument('--m1', type=int, default=1, help='number of randomly sampled images')
+parser.add_argument('--m2', type=int, default=1, help='num of copies')
+parser.add_argument('--strength', type=float, default=0)
 
-parser.add_argument('--source_model', type=str, default='resnet_50', choices=['inception_v3','resnet_50','densenet_121','vgg16_bn'])
-parser.add_argument('--adv_attack_method', type=str, default='PGD', choices=['PGD'])
+parser.add_argument('--adv_perturbation', action='store_true')
+
+parser.add_argument('--adv_loss_function', type=str, default='CE', choices=['CE', 'MaxLogit'])
+
 parser.add_argument('--adv_epsilon', type=eval, default=16/255)
 parser.add_argument('--adv_steps', type=int, default=8)
 
 parser.add_argument('--transpoint', type=int, default=0)
 
+parser.add_argument('--seed', type=int, default=0)
 
-
-parser.add_argument('--save', type=int, default=0)
 
 parser.add_argument('--MI', action='store_true')
 parser.add_argument('--DI', action='store_true')
 parser.add_argument('--TI', action='store_true')
 parser.add_argument('--SI', action='store_true')
-parser.add_argument('--SI_number', type=int, default=1)
+parser.add_argument('--random_start', action='store_true')
+
+
+parser.add_argument('--save', action='store_true')
 
 parser.add_argument('--device', type=int, default=0)
+
 
 arg = parser.parse_args()
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(arg.device)
+
 
 arg.adv_alpha = arg.adv_epsilon / arg.adv_steps
 
@@ -69,10 +75,10 @@ def makedir(path):
         print('----------- There is this folder! -----------')
 
 
+exp_name = arg.source_model + '_' + arg.loss_function + '_'
 
-exp_name = arg.source_model+'_'+arg.loss_function+'_'+ 'iter_'+str(arg.max_iterations)+'_'
-
-
+if arg.targeted:
+    exp_name += 'T_'
 if arg.MI:
     exp_name += 'MI_'
 if arg.DI:
@@ -81,17 +87,19 @@ if arg.TI:
     exp_name += 'TI_'
 if arg.SI:
     exp_name += 'SI_'
-    exp_name = exp_name + str(arg.SI_number) + '_'
+if arg.m1 != 1:
+    exp_name += f'm1_{arg.m1}_'
+if arg.m2 != 1:
+    exp_name += f'm2_{arg.m2}_'
+if arg.strength != 0:
+    exp_name += 'Admix_'
 
-exp_name += 'num_aug_'
-exp_name += str(arg.num_data_augmentation) + '_'
 
-    
 exp_name += str(arg.transpoint)
+
 
 if arg.targeted:
     exp_name += '_target'
-    
 
 
 if arg.save:
@@ -109,7 +117,6 @@ def logging(s, print_=True, log_=True):
     if log_:
         with open(os.path.join(arg.file_path, 'log.txt'), 'a+') as f_log:
             f_log.write(s + '\n')
-
 
 
 logging(exp_name.format())
@@ -167,26 +174,19 @@ def DI(X_in):
     pad_right = w_rem - pad_left
 
     c = np.random.rand(1)
-    if c <= arg.transformation_rate:
+    if c <= 0.7:
         X_out = F.pad(F.interpolate(X_in, size=(rnd, rnd)), (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
         return X_out
     else:
         return X_in
 
 
-
-
-def pgd(model, data, labels, random_start=True):
+def pgd(model, data, labels, targeted, epsilon, k, a, random_start=True):
     
-    epsilon = arg.adv_epsilon
-    k = arg.adv_steps
-    a = arg.adv_alpha
     data_max = data + epsilon
     data_min = data - epsilon
-    d_min=0
-    d_max=1
-    data_max.clamp_(d_min, d_max)
-    data_min.clamp_(d_min, d_max)
+    data_max.clamp_(0, 1)
+    data_min.clamp_(0, 1)
 
     data = data.clone().detach().to(device)
     labels = labels.clone().detach().to(device)
@@ -195,38 +195,36 @@ def pgd(model, data, labels, random_start=True):
 
     if random_start:
         # Starting at a uniformly random point
-        perturbed_data = perturbed_data + torch.empty_like(perturbed_data).uniform_(-1*epsilon, epsilon)
+        perturbed_data = perturbed_data + torch.empty_like(perturbed_data).uniform_(-epsilon, epsilon)
         perturbed_data = torch.clamp(perturbed_data, min=0, max=1).detach()
 
     for _ in range(k):
         perturbed_data.requires_grad = True
         outputs = model(norm(perturbed_data))
+        if arg.adv_loss_function == 'CE':
+            loss = nn.CrossEntropyLoss(reduction='sum')
+            cost = -1 * loss(outputs, labels)
 
-        loss = nn.CrossEntropyLoss(reduction='sum')
-        cost = -1 * loss(outputs, labels)
+        elif arg.adv_loss_function == 'MaxLogit':
+                real = outputs.gather(1, labels.unsqueeze(1)).squeeze(1)
+                cost = real.sum()
+
         # Update adversarial images
         cost.backward()
 
         gradient = perturbed_data.grad.clone().to(device)
         perturbed_data.grad.zero_()
+
         with torch.no_grad():
             perturbed_data.data -= a * torch.sign(gradient)
-            perturbed_data.data = torch.max(torch.min(perturbed_data, data_max), data_min)
-    return perturbed_data
-
-
+            perturbed_data.data = torch.max(torch.min(perturbed_data.data, data_max), data_min)
+    return perturbed_data.detach()
 
 
 model_1 = models.inception_v3(pretrained=True, transform_input=True).eval()
 model_2 = models.resnet50(pretrained=True).eval()
 model_3 = models.densenet121(pretrained=True).eval()
 model_4 = models.vgg16_bn(pretrained=True).eval()
-
-
-model_1_n = "inception_v3"
-model_2_n = "resnet_50"
-model_3_n = "densenet_121"
-model_4_n = "vgg16_bn"
 
 
 for param in model_1.parameters():
@@ -241,14 +239,27 @@ for param in model_4.parameters():
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 logging(f'device: {device}')
+
 model_1.to(device)
 model_2.to(device)
 model_3.to(device)
 model_4.to(device)
 
+if arg.source_model == 'inception-v3':
+    model_source = model_1
+elif arg.source_model == 'resnet50':
+    model_source = model_2
+elif arg.source_model == 'densenet121':
+    model_source = model_3
+elif arg.source_model == 'vgg16bn':
+    model_source = model_4
+
+logging("setting up the source and target models")
+
 torch.manual_seed(arg.seed)
 torch.backends.cudnn.deterministic = True
 np.random.seed(arg.seed)
+
 
 
 # values are standard normalization for ImageNet images,
@@ -262,56 +273,27 @@ input_path = '/targeted_attack/dataset/images/'
 lr = 2 / 255  # step size
 epsilon = 16  # L_inf norm bound
 num_batches = np.int(np.ceil(len(image_id_list) / arg.batch_size))
-logging("loaded the images")
 
-if arg.source_model == "resnet_50":
-    model_source  = model_2
-    model_source_n = model_2_n
-elif arg.source_model == "inception_v3":
-    model_source  = model_1
-    model_source_n = model_1_n
-elif arg.source_model == "densenet_121":
-    model_source  = model_3
-    model_source_n = model_3_n
-elif arg.source_model == "vgg16_bn":
-    model_source  = model_4
-    model_source_n = model_4_n
-logging("setting up the source and target models")
+logging("loaded the images".format())
+n = tdist.Normal(0.0, 15/255)
 
 #-------------------------------------#
-X_adv_10 = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
-X_adv_50 = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
-X_adv_100 = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
-X_adv_200 = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
-X_adv_300 = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
-X_adv_final = torch.zeros(len(image_id_list),3,img_size,img_size).to(device)
+X_adv_10 = torch.zeros(len(image_id_list), 3, img_size, img_size)
+X_adv_50 = torch.zeros(len(image_id_list), 3, img_size, img_size)
+X_adv_100 = torch.zeros(len(image_id_list), 3, img_size, img_size)
+X_adv_200 = torch.zeros(len(image_id_list), 3, img_size, img_size)
+X_adv_300 = torch.zeros(len(image_id_list), 3, img_size, img_size)
+X_adv_400 = torch.zeros(len(image_id_list), 3, img_size, img_size)
 
 fixing_point = 0
 
 adv_activate = 0
+
 pos = np.zeros((4, arg.max_iterations // 10))
 
 
-attack_x_adv_0 = 0
-attack_x_adv_10 = 0
-attack_x_adv_20 = 0
-attack_x_adv_50 = 0
-attack_x_adv_100 = 0
-attack_x_adv_200 = 0
-
-gau_x_adv_0 = 0
-gau_x_adv_10 = 0
-gau_x_adv_20 = 0
-gau_x_adv_50 = 0
-gau_x_adv_100 = 0
-gau_x_adv_200 = 0
-
-total_number = 0
-
 for k in range(0, num_batches):
-
     batch_size_cur = min(arg.batch_size, len(image_id_list) - k * arg.batch_size)
-    total_number += batch_size_cur
     X_ori = torch.zeros(batch_size_cur, 3, img_size, img_size).to(device)
     delta = torch.zeros_like(X_ori, requires_grad=True).to(device)
     for i in range(batch_size_cur):
@@ -321,55 +303,93 @@ for k in range(0, num_batches):
     grad_pre = 0
     prev = float('inf')
 
+    if arg.random_start:
+        # Starting at a uniformly random point
+        delta.requires_grad_(False)
+        delta = delta + torch.empty_like(X_ori).uniform_(-epsilon/255, epsilon/255)
+        delta = torch.clamp(X_ori+delta, min=0, max=1) - X_ori
+        delta.requires_grad_(True)
+
     logging(50*"#")
     logging("starting :{} batch".format(k+1))
+    
 
     for t in range(arg.max_iterations):
-
-
         if t < arg.transpoint:
             adv_activate = 0
-            num_augmentation = 1
         else:
-            adv_activate = 1
-            num_augmentation = arg.num_data_augmentation
-        
-        
-        grad_list = []
-        
-        for ii in range(num_augmentation):
-
-            if adv_activate:
-                #-----------------------------------#
-                # do untargeted attacks for adversarial data augmentations
-                delta.requires_grad_(False)
-                
-                if arg.adv_targeted:
-                    label_pred = labels
-                else:
-                    label_pred = target_labels
-                
-                if arg.adv_attack_method == 'PGD':
-                    X_advaug = pgd(model_source, X_ori+delta, label_pred)
-                
-                X_aug = X_advaug - (X_ori+delta)
-                delta.requires_grad_(True)
-
+            if arg.adv_perturbation:
+                adv_activate = 1
             else:
-                X_aug = 0
+                adv_activate = 0
+        grad_list = []
 
-            for j in range(arg.SI_number):
-                
+        for q in range(arg.m1):
+            delta.requires_grad_(False)
+
+            if arg.strength == 0:
+                X_addin = torch.zeros_like(X_ori).to(device)
+            else:
+                X_addin = torch.zeros_like(X_ori).to(device)
+                random_labels = torch.zeros(batch_size_cur).to(device)
+                stop = False
+                while stop == False:
+                    random_indices = np.random.randint(0, 1000, batch_size_cur)
+                    for i in range(batch_size_cur):
+                        X_addin[i] = trn(Image.open(input_path + image_id_list[random_indices[i]] + '.png'))
+                        random_labels[i] = label_ori_list[random_indices[i]]
+                    if torch.sum(random_labels==labels).item() == 0:
+                        stop = True
+                X_addin = arg.strength * X_addin
+                X_addin = torch.clamp(X_ori+delta+X_addin, min=0, max=1) - (X_ori+delta)
+            
+            if arg.SI:
+
+                if adv_activate:
+                    top_values_1, top_indices_1 = model_source(norm(X_ori+delta+X_addin)).topk(arg.m1+1, dim=1, largest=True, sorted=True)
+                    
+                    if arg.adv_targeted:
+                        label_pred = labels
+                    else:
+                        label_pred = target_labels
+
+                    X_advaug = pgd(model_source, X_ori+delta+X_addin, label_pred, arg.adv_targeted, arg.adv_epsilon, arg.adv_steps, arg.adv_alpha)
+                    X_aug = X_advaug - (X_ori+delta+X_addin)
+
+                else:
+                    X_aug = torch.zeros_like(X_ori).to(device)
+
+            delta.requires_grad_(True)
+
+            for j in range(arg.m2):
+
+                if not arg.SI:
+                    delta.requires_grad_(False)
+
+                    if adv_activate:
+                        top_values_2, top_indices_2 = model_source(norm(X_ori+delta+X_addin)).topk(arg.m2+1, dim=1, largest=True, sorted=True)
+                        
+                        if arg.adv_targeted:
+
+                            label_pred = labels
+                        else:
+                            label_pred = target_labels
+                            X_advaug = pgd(model_source, X_ori+delta+X_addin, label_pred, arg.adv_targeted, arg.adv_epsilon, arg.adv_steps, arg.adv_alpha)
+                            X_aug = X_advaug - (X_ori+delta+X_addin)
+                    else:
+                        X_aug = torch.zeros_like(X_ori).to(device)
+                    delta.requires_grad_(True)
+
                 if arg.DI:  # DI
                     if arg.SI:
-                        logits = model_source(norm(DI((X_ori + X_aug + delta)/2**j)))
+                        logits = model_source(norm(DI((X_ori + delta + X_addin + X_aug )/2**j)))
                     else:
-                        logits = model_source(norm(DI(X_ori + X_aug + delta)))
+                        logits = model_source(norm(DI(X_ori + delta + X_addin + X_aug )))
                 else:
                     if arg.SI:
-                        logits = model_source(norm((X_ori + delta + X_aug)/2**j))
+                        logits = model_source(norm((X_ori + delta + X_addin + X_aug )/2**j))
                     else:
-                        logits = model_source(norm(X_ori + delta + X_aug))
+                        logits = model_source(norm(X_ori + delta + X_addin + X_aug ))
 
                 if arg.loss_function == 'CE':
                     loss_func = nn.CrossEntropyLoss(reduction='sum')
@@ -377,6 +397,7 @@ for k in range(0, num_batches):
                         loss = loss_func(logits, target_labels)
                     else:
                         loss = -1 * loss_func(logits, labels)
+
                 elif arg.loss_function == 'MaxLogit':
                     if arg.targeted:
                         real = logits.gather(1,target_labels.unsqueeze(1)).squeeze(1)
@@ -384,21 +405,24 @@ for k in range(0, num_batches):
                     else:
                         real = logits.gather(1,labels.unsqueeze(1)).squeeze(1)
                         loss = real.sum()
+
                 loss.backward()
                 grad_cc = delta.grad.clone().to(device)
+
                 if arg.TI:  # TI
                     grad_cc = F.conv2d(grad_cc, gaussian_kernel, bias=None, stride=1, padding=(2, 2), groups=3)
                 grad_list.append(grad_cc)
                 delta.grad.zero_()
 
         grad_c = 0
-        for j in range(len(grad_list)):
+
+        for j in range(arg.m1 * arg.m2):
             grad_c += grad_list[j]
-        grad_c = grad_c / len(grad_list)
+        grad_c = grad_c / (arg.m1 * arg.m2)
 
         if arg.MI:  # MI
             grad_c = grad_c / torch.mean(torch.abs(grad_c), (1, 2, 3), keepdim=True) + 1 * grad_pre
-            
+
         grad_pre = grad_c
         delta.data = delta.data - lr * torch.sign(grad_c)
         delta.data = delta.data.clamp(-epsilon / 255, epsilon / 255)
@@ -415,31 +439,25 @@ for k in range(0, num_batches):
                 pos[1, t // 10] = pos[1, t // 10] + sum(torch.argmax(model_2(norm(X_ori + delta)), dim=1) != labels).cpu().numpy()
                 pos[2, t // 10] = pos[2, t // 10] + sum(torch.argmax(model_3(norm(X_ori + delta)), dim=1) != labels).cpu().numpy()
                 pos[3, t // 10] = pos[3, t // 10] + sum(torch.argmax(model_4(norm(X_ori + delta)), dim=1) != labels).cpu().numpy()
-            
+
             logging(str(pos))
             logging(30*"#")
 
-        # gau_alpha = 0.05
-        # save adv examples in 10, 50, 100, 200, 300, final iters 
+
+
         if t == (1-1):
-            X_adv_10[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
-
-        if t == (20-1):
-            # x_test = (X_ori + delta).detach()
-            X_adv_10[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
-
+            X_adv_10[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
         if t == (50-1):
-            X_adv_50[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
-
+            X_adv_50[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
         if t == (100-1):
-            X_adv_100[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
+            X_adv_100[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
         if t == (200-1):
-            X_adv_200[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
+            X_adv_200[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
         if t == (300-1):
-            X_adv_300[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
-        if t == (arg.max_iterations-1):
-            X_adv_final[fixing_point: fixing_point+batch_size_cur] = (X_ori + delta).detach()
-
+            X_adv_300[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
+        if t == (400-1):
+            X_adv_400[fixing_point:fixing_point+batch_size_cur] = (X_ori + delta).clone().detach().cpu()
+    
     fixing_point += batch_size_cur
     logging(50*"#")
 
@@ -471,7 +489,6 @@ logging("results for 400 iters:")
 logging(str(pos[:, 39]))
 
 
-
 if arg.save:
     np.save(arg.file_path+'/'+'results'+'.npy', pos)
 
@@ -481,7 +498,7 @@ if arg.save:
     # X_adv_100 = X_adv_100.detach().cpu()
     # X_adv_200 = X_adv_200.detach().cpu()
     # X_adv_300 = X_adv_300.detach().cpu()
-    X_adv_400 = X_adv_final.detach().cpu()
+    X_adv_400 = X_adv_400.detach().cpu()
 
     logging("saving the adversarial examples")
 
@@ -509,12 +526,4 @@ logging("finishing the attack experiment")
 logging(50*"#")
 logging(50*"#")
 logging(50*"#")
-
-
-
-
-
-
-
-
 
